@@ -236,6 +236,7 @@ class Qwen3TTSInterface:
         enforce_eager: bool = False,
         tensor_parallel_size: int = 1,
         gpu_memory_utilization: float = 0.9,
+        speech_tokenizer_path: str | None = None,
     ):
         """Load Qwen3TTSInterface from HuggingFace model repository or local path.
         
@@ -333,10 +334,12 @@ class Qwen3TTSInterface:
             enforce_eager=enforce_eager,
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
+            speech_tokenizer_path=speech_tokenizer_path,
         )
     
     def __init__(self, model_path: str, enforce_eager: bool = False, tensor_parallel_size: int = 1,
-                 gpu_memory_utilization: float = 0.9):
+                 gpu_memory_utilization: float = 0.9,
+                 speech_tokenizer_path: str | None = None):
         self.model_path = model_path
         self.enforce_eager = enforce_eager
         self.tensor_parallel_size = tensor_parallel_size
@@ -381,6 +384,7 @@ class Qwen3TTSInterface:
         # Initialize speech tokenizer and speaker encoder if available
         self.speech_tokenizer = None
         self.speaker_encoder = None
+        self._speech_tokenizer_path = speech_tokenizer_path
         self._init_speech_components()
         self._mp_holder = None
 
@@ -423,7 +427,8 @@ class Qwen3TTSInterface:
         try:
             # Try to load speech tokenizer
             if HAS_SPEECH_TOKENIZER:
-                self.speech_tokenizer = SpeechTokenizer("Qwen/Qwen3-TTS-Tokenizer-12Hz", dtype=torch.bfloat16)
+                if self._speech_tokenizer_path:
+                    self.speech_tokenizer = SpeechTokenizer(self._speech_tokenizer_path, dtype=torch.bfloat16)
             
             # Try to load speaker encoder from model
             # Check if speaker_encoder exists in the model
@@ -1230,10 +1235,11 @@ class Qwen3TTSInterface:
                     last_id = token_ids[-1]
                     if generation_step == 0:
                         logger.info(f"[gen_async:{request_id[:8]}] first token: last_id={last_id} (2150=EOS)")
-                    if last_id == 2150:
+                    talker_finished = last_id == 2150 or payload.get("is_finished", False)
+                    if talker_finished:
                         if generation_step == 0:
                             logger.warning(
-                                f"[gen_async:{request_id[:8]}] exiting with 0 codes (talker sent EOS token 2150 immediately)"
+                                f"[gen_async:{request_id[:8]}] exiting with 0 codes (talker finished immediately, last_id={last_id})"
                             )
                         self._mp_holder.talker_client.send_clear_request(request_id)
                         break
