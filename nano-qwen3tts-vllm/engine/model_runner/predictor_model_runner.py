@@ -87,7 +87,7 @@ class PredictorModelRunner(ModelRunner):
             # Prefill graph: use when we have a captured (num_seqs, num_tokens) and no prefix cache
             key = (num_seqs, num_tokens)
             if key in self.graphs_prefill and context.block_tables is None:
-                logger.info(f"[predictor model runner] Running prefill graph with num_seqs={num_seqs} num_tokens={num_tokens}")
+                logger.debug(f"[predictor model runner] Running prefill graph with num_seqs={num_seqs} num_tokens={num_tokens}")
                 graph = self.graphs_prefill[key]
                 graph_vars = self.graph_vars_prefill
                 graph_vars["input_embeds"][:num_tokens] = input_embeds
@@ -111,21 +111,30 @@ class PredictorModelRunner(ModelRunner):
             else:
                 hidden_states = self.model(input_embeds, positions)
         else:
-            logger.info(f"[predictor model runner] Running decode graph")
             bs = input_embeds.size(0)
             context = get_context()
-            graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
-            graph_vars = self.graph_vars
-            graph_vars["input_embeds"][:bs] = input_embeds
-            graph_vars["positions"][:bs] = positions
-            graph_vars["slot_mapping"].fill_(-1)
-            graph_vars["slot_mapping"][:bs] = context.slot_mapping
-            graph_vars["context_lens"].zero_()
-            graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
-            graph.replay()
-            # Use outputs from the graph; do NOT run self.model() again (that would double the work).
-            hidden_states = graph_vars["outputs"][:bs]
+            graph_max_blocks = self.graph_vars["block_tables"].size(1) if hasattr(self, "graph_vars") else 0
+            num_seq_blocks = context.block_tables.size(1)
+            if num_seq_blocks > graph_max_blocks:
+                logger.warning(
+                    f"[predictor model runner] block_tables overflow: "
+                    f"seq needs {num_seq_blocks} blocks, graph supports {graph_max_blocks}. "
+                    f"Falling back to eager mode."
+                )
+                hidden_states = self.model(input_embeds, positions)
+            else:
+                logger.debug(f"[predictor model runner] Running decode graph")
+                graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
+                graph_vars = self.graph_vars
+                graph_vars["input_embeds"][:bs] = input_embeds
+                graph_vars["positions"][:bs] = positions
+                graph_vars["slot_mapping"].fill_(-1)
+                graph_vars["slot_mapping"][:bs] = context.slot_mapping
+                graph_vars["context_lens"].zero_()
+                graph_vars["context_lens"][:bs] = context.context_lens
+                graph_vars["block_tables"][:bs, :num_seq_blocks] = context.block_tables
+                graph.replay()
+                hidden_states = graph_vars["outputs"][:bs]
             
         logits = self.model.compute_logits(hidden_states, generation_steps)        
         return logits

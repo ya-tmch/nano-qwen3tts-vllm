@@ -249,6 +249,15 @@ class ModelRunner:
         else:
             bs = input_ids.size(0)
             context = get_context()
+            graph_max_blocks = self.graph_vars["block_tables"].size(1) if hasattr(self, "graph_vars") else 0
+            num_seq_blocks = context.block_tables.size(1)
+            if num_seq_blocks > graph_max_blocks:
+                logger.warning(
+                    f"[model runner] block_tables overflow: "
+                    f"seq needs {num_seq_blocks} blocks, graph supports {graph_max_blocks}. "
+                    f"Falling back to eager mode."
+                )
+                return self.model.compute_logits(self.model(model_input, positions))
             graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
             graph_vars = self.graph_vars
             graph_vars["input_ids"][:bs] = input_ids
@@ -257,7 +266,7 @@ class ModelRunner:
             graph_vars["slot_mapping"][:bs] = context.slot_mapping
             graph_vars["context_lens"].zero_()
             graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
+            graph_vars["block_tables"][:bs, :num_seq_blocks] = context.block_tables
             graph.replay()
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 

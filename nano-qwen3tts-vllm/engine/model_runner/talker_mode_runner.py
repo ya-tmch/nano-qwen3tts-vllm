@@ -87,20 +87,30 @@ class TalkerModeModelRunner(ModelRunner):
         elif self.enforce_eager or model_input.size(0) > 512:
             hidden_states = self.model(model_input, positions)
         else:
-            use_graph = True
             bs = input_embeds.size(0)
             context = get_context()
-            graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
-            graph_vars = self.graph_vars
-            graph_vars["input_embeds"][:bs] = model_input
-            graph_vars["positions"][:bs] = positions
-            graph_vars["slot_mapping"].fill_(-1)
-            graph_vars["slot_mapping"][:bs] = context.slot_mapping
-            graph_vars["context_lens"].zero_()
-            graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
-            graph.replay()
-            hidden_states = graph_vars["outputs"][:bs]
+            graph_max_blocks = self.graph_vars["block_tables"].size(1) if hasattr(self, "graph_vars") else 0
+            num_seq_blocks = context.block_tables.size(1)
+            if num_seq_blocks > graph_max_blocks:
+                logger.warning(
+                    f"[talker mode model runner] block_tables overflow: "
+                    f"seq needs {num_seq_blocks} blocks, graph supports {graph_max_blocks}. "
+                    f"Falling back to eager mode."
+                )
+                hidden_states = self.model(model_input, positions)
+            else:
+                use_graph = True
+                graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
+                graph_vars = self.graph_vars
+                graph_vars["input_embeds"][:bs] = model_input
+                graph_vars["positions"][:bs] = positions
+                graph_vars["slot_mapping"].fill_(-1)
+                graph_vars["slot_mapping"][:bs] = context.slot_mapping
+                graph_vars["context_lens"].zero_()
+                graph_vars["context_lens"][:bs] = context.context_lens
+                graph_vars["block_tables"][:bs, :num_seq_blocks] = context.block_tables
+                graph.replay()
+                hidden_states = graph_vars["outputs"][:bs]
 
         logits = self.model.compute_logits(hidden_states)
         
@@ -109,7 +119,7 @@ class TalkerModeModelRunner(ModelRunner):
             last_indices = context.cu_seqlens_q[1:] - 1
             hidden_states = hidden_states[last_indices].contiguous()
         
-        logger.info(f"[talker mode model runner] Model run prefill={is_prefill} {input_embeds.shape} latency: {time.time() - start} use_graph={use_graph}")
+        logger.debug(f"[talker mode model runner] Model run prefill={is_prefill} {input_embeds.shape} latency: {time.time() - start} use_graph={use_graph}")
 
         return logits, hidden_states
 

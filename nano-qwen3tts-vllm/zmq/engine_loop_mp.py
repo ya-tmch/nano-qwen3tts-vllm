@@ -56,7 +56,7 @@ async def run_talker_loop_mp(
         # Run step with whoever is ready; do not wait for all active, so chunk-2
         # / time-to-first-audio stays low when many requests are concurrent.
         try:
-            logger.info(
+            logger.debug(
                 f"[talker_loop_mp] run_step active={len(active)} talker_ready={len(talker_ready)} "
                 f"request_ids={list(talker_ready)[:3]!r}"
             )
@@ -76,7 +76,7 @@ async def run_talker_loop_mp(
         for item in outputs_all:
             request_id, seq_id, token_ids, hidden_states, is_finished = item
             completed_this_step.add(request_id)
-            payload = {"token_ids": token_ids, "hidden_states": hidden_states}
+            payload = {"token_ids": token_ids, "hidden_states": hidden_states, "is_finished": is_finished}
             async with queues_lock:
                 q = request_queues.get(request_id)
             if q is not None:

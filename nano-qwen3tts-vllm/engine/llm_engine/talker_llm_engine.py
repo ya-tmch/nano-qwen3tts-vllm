@@ -72,9 +72,13 @@ class TalkerScheduler(Scheduler):
             seq.decode_input_embeds = None
             idx += 1
             if seq.request_id is not None:
-                finish = not seq.ignore_eos and token_id == self.eos
+                finish = (not seq.ignore_eos and token_id == self.eos) or len(seq) >= self.max_model_len
             else:
-                finish = (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens >= seq.max_tokens
+                finish = (
+                    (not seq.ignore_eos and token_id == self.eos)
+                    or seq.num_completion_tokens >= seq.max_tokens
+                    or len(seq) >= self.max_model_len
+                )
             if finish:
                 seq.status = SequenceStatus.FINISHED
                 if seq.request_id is not None:
